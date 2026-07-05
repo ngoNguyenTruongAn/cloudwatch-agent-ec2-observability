@@ -1,6 +1,6 @@
 # AWS-native Observability cho EC2 với CloudWatch Agent
 
-Repository này chứa bài lab thực hành triển khai observability cho EC2 bằng **Amazon CloudWatch Agent**.
+Repository này chứa bài lab thực hành triển khai **AWS-native observability cho EC2** bằng **Amazon CloudWatch Agent**.
 
 Bài lab mô phỏng cách thu thập system metrics, application logs, process metrics, tạo dashboard, cấu hình alarm và gửi email notification bằng các dịch vụ AWS-native.
 
@@ -29,6 +29,24 @@ Trong bài lab này, mình sử dụng **CloudWatch Agent** để thu thập cá
 
 ---
 
+## Vì sao cần CloudWatch Agent?
+
+EC2 basic monitoring chủ yếu quan sát instance từ bên ngoài. Vì vậy CloudWatch có thể thấy các metric như CPU, network, disk I/O và status check.
+
+Nhưng các thông tin nằm bên trong operating system như memory đang dùng bao nhiêu, filesystem còn trống bao nhiêu, application log ghi gì, hoặc process Nginx còn chạy hay không thì CloudWatch không tự thấy được nếu chỉ dùng basic monitoring.
+
+CloudWatch Agent giải quyết khoảng trống đó bằng cách chạy bên trong EC2 instance. Agent đọc metrics và logs từ hệ điều hành, sau đó gửi dữ liệu về CloudWatch Metrics và CloudWatch Logs.
+
+```text
+EC2 basic monitoring
+→ nhìn từ bên ngoài instance
+
+CloudWatch Agent
+→ nhìn được bên trong operating system
+```
+
+---
+
 ## Phạm vi bài lab
 
 Bài lab gồm 2 tình huống thực tế.
@@ -49,6 +67,8 @@ Flow:
 Existing EC2
 → Attach IAM Role
 → Kiểm tra Systems Manager access
+→ Kiểm tra Nginx đang chạy
+→ Xác nhận CloudWatch Agent chưa cài
 → Cài CloudWatch Agent
 → Tạo CloudWatch Agent config
 → Start CloudWatch Agent
@@ -103,9 +123,7 @@ Local Terminal
 
 Architecture diagram:
 
-
 ![High-level Architecture](./architecture/high-level-architecture.jpg)
-
 
 ---
 
@@ -113,9 +131,9 @@ Architecture diagram:
 
 | Service | Vai trò |
 |---|---|
-| Amazon EC2 | Máy chủ chạy workload |
-| Amazon CloudWatch Agent | Thu thập metrics và logs từ EC2 |
-| CloudWatch Metrics | Lưu system/custom metrics |
+| Amazon EC2 | Máy chủ chạy workload Nginx |
+| Amazon CloudWatch Agent | Thu thập metrics và logs từ bên trong EC2 |
+| CloudWatch Metrics | Lưu memory, disk, CPU và process metrics |
 | CloudWatch Logs | Lưu application logs và system logs |
 | CloudWatch Dashboard | Visualize các metric quan trọng |
 | CloudWatch Alarms | Kích hoạt cảnh báo khi metric vượt ngưỡng |
@@ -165,6 +183,7 @@ cloudwatch-agent-ec2-observability/
 ├── 01-cloudwatch-agent-lab-evidence.md
 ├── 01-aws-native-observability-for-ec2-with-cloudwatch-agent.md
 ├── README.md
+└── .gitignore
 ```
 
 ---
@@ -176,8 +195,6 @@ cloudwatch-agent-ec2-observability/
 | `01-cloudwatch-agent-lab-evidence.md` | File evidence step-by-step của bài lab |
 | `01-aws-native-observability-for-ec2-with-cloudwatch-agent.md` | Blog draft được viết lại từ bài lab |
 | `scripts/case1-cloudwatch-agent-config.json` | CloudWatch Agent config cho Case 1 |
-| `scripts/case1-install-cloudwatch-agent.sh` | Script cài CloudWatch Agent cho EC2 đã có sẵn |
-| `scripts/case1-start-cloudwatch-agent.sh` | Script start CloudWatch Agent với config file |
 | `scripts/case2-user-data.sh` | User Data script để bootstrap EC2 ở Case 2 |
 | `scripts/cleanup.md` | Checklist cleanup sau khi hoàn thành lab |
 
@@ -282,6 +299,70 @@ cat /etc/os-release
 
 ---
 
+## Chi phí và Log Retention
+
+CloudWatch Agent có thể phát sinh chi phí tùy theo:
+
+- Số lượng custom metrics
+- Số lượng dimension của metrics
+- Tần suất gửi metrics
+- Số lượng log events
+- Thời gian lưu CloudWatch Logs
+
+Trong bài lab này, các metric như memory, disk và Nginx process count được gửi vào namespace `CWAgent`. Đây là custom metrics, vì vậy cần kiểm soát số lượng metric/dimension ngay từ đầu.
+
+Mình dùng interval 60 giây:
+
+```text
+metrics_collection_interval: 60
+```
+
+Nếu giảm xuống 10 giây, dữ liệu sẽ chi tiết hơn nhưng số lượng datapoint tăng lên và có thể làm tăng chi phí.
+
+Với CloudWatch Logs, nếu không cấu hình retention, log group có thể giữ log vô thời hạn. Nên đặt retention policy sau khi log group được tạo.
+
+Ví dụ đặt retention 7 ngày cho Case 1:
+
+```bash
+aws logs put-retention-policy \
+  --log-group-name "/ec2/cloudwatch-agent/case1/nginx/access" \
+  --retention-in-days 7 \
+  --region us-east-1
+
+aws logs put-retention-policy \
+  --log-group-name "/ec2/cloudwatch-agent/case1/nginx/error" \
+  --retention-in-days 7 \
+  --region us-east-1
+```
+
+Ví dụ đặt retention 7 ngày cho Case 2:
+
+```bash
+aws logs put-retention-policy \
+  --log-group-name "/ec2/cloudwatch-agent/case2/nginx/access" \
+  --retention-in-days 7 \
+  --region us-east-1
+
+aws logs put-retention-policy \
+  --log-group-name "/ec2/cloudwatch-agent/case2/nginx/error" \
+  --retention-in-days 7 \
+  --region us-east-1
+
+aws logs put-retention-policy \
+  --log-group-name "/ec2/cloudwatch-agent/case2/system/cloud-init" \
+  --retention-in-days 7 \
+  --region us-east-1
+
+aws logs put-retention-policy \
+  --log-group-name "/ec2/cloudwatch-agent/case2/system/dnf" \
+  --retention-in-days 7 \
+  --region us-east-1
+```
+
+Trong production, retention nên được chọn theo nhu cầu audit, compliance và chi phí, ví dụ 7 ngày, 14 ngày, 30 ngày hoặc lâu hơn.
+
+---
+
 ## Case 1: EC2 đã có sẵn
 
 ### Mục tiêu
@@ -325,6 +406,51 @@ Trên EC2 instance, file config được đặt tại:
 /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
 ```
 
+Config này thu thập:
+
+```text
+Metrics:
+- mem_used_percent
+- disk_used_percent
+- cpu usage metrics
+- Nginx process count qua procstat
+
+Logs:
+- /var/log/nginx/access.log
+- /var/log/nginx/error.log
+```
+
+Phần cốt lõi của config là `procstat` và `logs`.
+
+Ví dụ `procstat` để theo dõi process Nginx:
+
+```json
+{
+  "procstat": [
+    {
+      "exe": "nginx",
+      "measurement": [
+        "pid_count",
+        "cpu_usage",
+        "memory_rss"
+      ],
+      "metrics_collection_interval": 60
+    }
+  ]
+}
+```
+
+Ví dụ log collection cho Nginx access log:
+
+```json
+{
+  "file_path": "/var/log/nginx/access.log",
+  "log_group_name": "/ec2/cloudwatch-agent/case1/nginx/access",
+  "log_stream_name": "{instance_id}-access",
+  "timezone": "UTC"
+}
+```
+
 ### Start CloudWatch Agent
 
 ```bash
@@ -362,13 +488,32 @@ Bài lab thu thập metrics trong namespace `CWAgent`:
 | `cpu_usage_user` | Phần trăm CPU user |
 | `cpu_usage_system` | Phần trăm CPU system |
 
+### Vì sao Nginx Process Count có thể lớn hơn 1?
+
+Metric `procstat_lookup_pid_count` cho biết số process Nginx mà CloudWatch Agent tìm thấy.
+
+Với Nginx, giá trị này thường lớn hơn `1` vì Nginx thường chạy theo mô hình:
+
+```text
+1 master process
++ N worker processes
+```
+
+Ví dụ nếu dashboard hiển thị:
+
+```text
+Nginx Process Count = 3
+```
+
+Điều đó có thể hiểu là Nginx đang có 1 master process và 2 worker processes. Đây là trạng thái bình thường, không phải lỗi.
+
 ### Logs thu thập
 
 Nginx logs được gửi lên CloudWatch Logs:
 
 ```text
-/ec2/cloudwatch-agent/nginx/access
-/ec2/cloudwatch-agent/nginx/error
+/ec2/cloudwatch-agent/case1/nginx/access
+/ec2/cloudwatch-agent/case1/nginx/error
 ```
 
 ### Alarm và Notification
@@ -385,6 +530,25 @@ Action: Send notification to SNS topic
 ```
 
 Trong môi trường production, threshold nên cao hơn, ví dụ `80` hoặc `85`, tùy baseline workload.
+
+Khi cấu hình alarm, cần chú ý thêm:
+
+| Thuộc tính | Ý nghĩa |
+|---|---|
+| `Period` | Khoảng thời gian gom dữ liệu cho mỗi datapoint |
+| `Evaluation periods` | Số datapoint được dùng để đánh giá alarm |
+| `Datapoints to alarm` | Số datapoint cần vượt ngưỡng để chuyển sang `ALARM` |
+| `TreatMissingData` | Cách xử lý khi metric không gửi dữ liệu |
+
+Ví dụ production nên dùng:
+
+```text
+Period: 5 minutes
+Evaluation periods: 3
+Datapoints to alarm: 2 out of 3
+```
+
+Cách này giúp giảm false alarm do spike ngắn. `TreatMissingData` cũng quan trọng vì nếu agent ngừng gửi metric, alarm có thể chuyển sang hoặc bị kẹt ở trạng thái `INSUFFICIENT_DATA`.
 
 ### Dashboard
 
@@ -439,6 +603,38 @@ Tạo request test để sinh Nginx access log
 Ghi CloudWatch Agent config
 Start CloudWatch Agent
 Enable CloudWatch Agent service
+```
+
+Một phần quan trọng của User Data:
+
+```bash
+#!/bin/bash
+set -euxo pipefail
+
+dnf update -y
+dnf install -y nginx amazon-cloudwatch-agent
+
+systemctl enable nginx
+systemctl start nginx
+
+echo "Bootstrap EC2 for CloudWatch Agent lab" > /usr/share/nginx/html/index.html
+
+curl http://localhost || true
+curl http://localhost || true
+curl http://localhost || true
+```
+
+Đoạn cuối của User Data start CloudWatch Agent bằng config vừa ghi:
+
+```bash
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config \
+  -m ec2 \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+  -s
+
+systemctl enable amazon-cloudwatch-agent
+systemctl restart amazon-cloudwatch-agent
 ```
 
 ### Kiểm tra CloudWatch Agent
@@ -606,9 +802,17 @@ Bài lab cũng cho thấy 2 pattern vận hành thực tế:
 - Xóa security groups không dùng nữa
 - Xóa VPC resources nếu chỉ tạo riêng cho bài lab
 
+Có thể xóa log group bằng CLI nếu không cần giữ evidence:
+
+```bash
+aws logs delete-log-group \
+  --log-group-name "/ec2/cloudwatch-agent/case1/nginx/access" \
+  --region us-east-1
+```
+
 ---
 
-## Ghi chú
+## Ghi chú production
 
 Repository này phục vụ mục đích học tập và demo.
 

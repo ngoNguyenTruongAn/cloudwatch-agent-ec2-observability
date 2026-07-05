@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euxo pipefail
 
 dnf update -y
 dnf install -y nginx amazon-cloudwatch-agent
@@ -7,7 +7,10 @@ dnf install -y nginx amazon-cloudwatch-agent
 systemctl enable nginx
 systemctl start nginx
 
-echo "CloudWatch Agent bootstrap test" > /usr/share/nginx/html/index.html
+echo "Bootstrap EC2 for CloudWatch Agent lab" > /usr/share/nginx/html/index.html
+
+curl http://localhost || true
+curl http://localhost || true
 curl http://localhost || true
 
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CONFIG_EOF'
@@ -64,9 +67,15 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CONFI
       "files": {
         "collect_list": [
           {
-            "file_path": "/var/log/messages",
-            "log_group_name": "/ec2/cloudwatch-agent/case2/system",
-            "log_stream_name": "{instance_id}-messages",
+            "file_path": "/var/log/cloud-init.log",
+            "log_group_name": "/ec2/cloudwatch-agent/case2/system/cloud-init",
+            "log_stream_name": "{instance_id}-cloud-init",
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/var/log/dnf.log",
+            "log_group_name": "/ec2/cloudwatch-agent/case2/system/dnf",
+            "log_stream_name": "{instance_id}-dnf",
             "timezone": "UTC"
           },
           {
@@ -94,4 +103,9 @@ CONFIG_EOF
   -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
   -s
 
-systemctl status amazon-cloudwatch-agent --no-pager || true
+systemctl enable amazon-cloudwatch-agent
+systemctl restart amazon-cloudwatch-agent
+
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -m ec2 \
+  -a status > /tmp/cwagent-status.txt || true
