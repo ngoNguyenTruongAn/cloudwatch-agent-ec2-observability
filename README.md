@@ -103,9 +103,9 @@ Local Terminal
 
 Architecture diagram:
 
-```markdown
+
 ![High-level Architecture](./architecture/high-level-architecture.jpg)
-```
+
 
 ---
 
@@ -159,15 +159,12 @@ cloudwatch-agent-ec2-observability/
 │
 ├── scripts/
 │   ├── case1-cloudwatch-agent-config.json
-│   ├── case1-install-cloudwatch-agent.sh
-│   ├── case1-start-cloudwatch-agent.sh
 │   ├── case2-user-data.sh
 │   └── cleanup.md
 │
 ├── 01-cloudwatch-agent-lab-evidence.md
 ├── 01-aws-native-observability-for-ec2-with-cloudwatch-agent.md
 ├── README.md
-└── .gitignore
 ```
 
 ---
